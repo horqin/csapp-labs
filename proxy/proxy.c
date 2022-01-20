@@ -24,34 +24,39 @@ void *thread(void *arg) {
     int connectfd = (int)(unsigned long)arg;
     pthread_detach(pthread_self());
 
-    char buf[LARGE_NUMBER];
+    char buf[LARGE_NUMBER], *ptr;
     int nbuf, n;
 
     nbuf = 0;
     do {
-        if ((n = Read(connectfd, buf+nbuf, sizeof(buf)-nbuf)) == 0)
+        if ((n = Read(connectfd, buf + nbuf, sizeof(buf) - nbuf)) == 0)
             app_error("[E] connection between client and proxy is closed");
         nbuf += n;
     } while (!memmem(buf, nbuf, "\r\n\r\n", 4));
+
     char addr[SMALL_NUMBER/4];
     char port[SMALL_NUMBER/4];
     char file[SMALL_NUMBER/4];
     parse(buf, addr, port, file);
     char info[SMALL_NUMBER];
     sprintf(info, "%s-%s-%s", addr, port, file);
+
     if (!(nbuf = cache_access(info, buf))) {
         int clientfd = Open_clientfd(addr, port);
         nbuf = sprintf(buf, "%s /%s %s\r\nHost: %s\r\nConnection: %s\r\nProxy-Connection: %s\r\n\r\n", 
                 "GET", file, "HTTP/1.0", "www.cmu.edu", "close", "close");
-        if (Write(clientfd, buf, nbuf) != nbuf) 
-            app_error("[E] can't send message to server correctly");
+        ptr = buf;
+        while (ptr < buf + nbuf)
+            ptr += Write(clientfd, ptr, nbuf - (ptr - buf));
         nbuf = 0;
-        while ((n = Read(clientfd, buf+nbuf, sizeof(buf)-nbuf)) != 0) nbuf += n;
+        while ((n = Read(clientfd, buf + nbuf, sizeof(buf) - nbuf)) != 0)
+            nbuf += n;
         Close(clientfd);
-        if (nbuf != 0) cache_modify(info, buf, nbuf);
+        cache_modify(info, buf, nbuf);
     }
-    if (Write(connectfd, buf, nbuf) != nbuf)
-        app_error("[E] can't send message to client correctly");
+    ptr = buf;
+    while (ptr < buf + nbuf)
+        ptr += Write(connectfd, ptr, nbuf - (ptr - buf));
     Close(connectfd);
 
     return NULL;
