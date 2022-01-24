@@ -4,9 +4,9 @@
 
 team_t team = {"c", "s", "a", "p", "p"};
 
-#define WSIZE     (sizeof(size_t)*1)
-#define DSIZE     (sizeof(size_t)*2)
-#define CHUNKSIZE (1<<12)
+#define WSIZE (sizeof(size_t) *    1)
+#define DSIZE (sizeof(size_t) *    2)
+#define CSIZE (sizeof(size_t) * 1024)
 
 #define MAXIMUM(x, y) ((x) > (y) ? (x) : (y))
 #define MINIMUM(x, y) ((x) < (y) ? (x) : (y))
@@ -17,20 +17,22 @@ team_t team = {"c", "s", "a", "p", "p"};
 #define GET(p)    (*(size_t *)(p))
 #define PUT(p, v) (*(size_t *)(p) = (v))
 
-#define GET_SIZE(p) (GET(p) & ~0x7)
-#define GET_ALLC(p) (GET(p) &  0x1)
+#define GET_SIZE(bp) (GET(bp - WSIZE) & ~0x7)
+#define GET_ALLC(bp) (GET(bp - WSIZE) &  0x1)
 
 #define HDRP(bp) ((bp) - WSIZE)
-#define FTRP(bp) ((bp) + GET_SIZE(HDRP(bp)) - DSIZE)
+#define FTRP(bp) ((bp) + GET_SIZE(bp) - DSIZE)
 
-#define NEXT_BLKP(bp) ((bp) + GET_SIZE((bp) - WSIZE))
-#define PREV_BLKP(bp) ((bp) - GET_SIZE((bp) - DSIZE))
+#define NEXT_BLKP(bp) ((bp) + (GET((bp) - WSIZE) & ~0x7))
+#define PREV_BLKP(bp) ((bp) - (GET((bp) - DSIZE) & ~0x7))
+
+#define NEXT_BLKP_ALLC(bp) (GET(FTRP(bp) + WSIZE) & 0x1)
+#define PREV_BLKP_ALLC(bp) (GET(HDRP(bp) - WSIZE) & 0x1)
 
 #define NEXT_LNKP(bp) (*((void **)bp + 0))
 #define PREV_LNKP(bp) (*((void **)bp + 1))
 
-static void *head_listp;
-static void *heap_listp;
+static void *head_list;
 
 static void *extend(size_t size);
 static void *coalesce(void *bp);
@@ -40,22 +42,18 @@ static void  insert(void *bp);
 static void  delete(void *bp);
 
 int mm_init() {
-    if ((head_listp = mem_sbrk(9 * WSIZE)) == (void *)-1) return -1;
-    PUT(head_listp + 0 * WSIZE, 0);
-    PUT(head_listp + 1 * WSIZE, 0);
-    PUT(head_listp + 2 * WSIZE, 0);
-    PUT(head_listp + 3 * WSIZE, 0);
-    PUT(head_listp + 4 * WSIZE, 0);
-    PUT(head_listp + 5 * WSIZE, 0);
-    PUT(head_listp + 6 * WSIZE, 0);
-    PUT(head_listp + 7 * WSIZE, 0);
-    PUT(head_listp + 8 * WSIZE, 0);
-    head_listp = head_listp + 0 * WSIZE;
-    if ((heap_listp = mem_sbrk(3 * WSIZE)) == (void *)-1) return -1;
-    PUT(heap_listp + 0 * WSIZE, PACK(DSIZE, 1));
-    PUT(heap_listp + 1 * WSIZE, PACK(DSIZE, 1));
-    PUT(heap_listp + 2 * WSIZE, PACK(0, 1));
-    heap_listp = heap_listp + 1 * WSIZE;
+    if ((head_list = mem_sbrk(12 * WSIZE)) == (void *)-1) return -1;
+    PUT(head_list +  0 * WSIZE, 0);
+    PUT(head_list +  1 * WSIZE, 0);
+    PUT(head_list +  2 * WSIZE, 0);
+    PUT(head_list +  3 * WSIZE, 0);
+    PUT(head_list +  4 * WSIZE, 0);
+    PUT(head_list +  5 * WSIZE, 0);
+    PUT(head_list +  6 * WSIZE, 0);
+    PUT(head_list +  7 * WSIZE, 0);
+    PUT(head_list +  8 * WSIZE, 0);
+    PUT(head_list + 10 * WSIZE, 1);
+    PUT(head_list + 11 * WSIZE, 1);
     return 0;
 }
 
@@ -63,25 +61,22 @@ void *mm_malloc(size_t size) {
     if (!size) return NULL;
     size_t asize = CEILING(size, DSIZE) + DSIZE;
     void *bp;
-    if (!(bp = findfit(asize))) {
-        size_t esize = MAXIMUM(asize, CHUNKSIZE);
+    if ((bp = findfit(asize))) delete(bp);
+    else {
+        size_t esize = MAXIMUM(asize, CSIZE);
         if (!(bp = extend(esize))) return NULL;
+        bp = coalesce(bp);
     }
     split(bp, asize);
     return bp;
 }
 
-void mm_free(void *bp) {
-    if (!bp) return;
-    PUT(HDRP(bp), PACK(GET_SIZE(HDRP(bp)), 0));
-    PUT(FTRP(bp), PACK(GET_SIZE(HDRP(bp)), 0));
-    coalesce(bp);
-}
+void mm_free(void *bp) { insert(coalesce(bp)); }
 
 void *mm_realloc(void *obp, size_t nsize) {
     if (!obp) return mm_malloc(nsize);
     if (!nsize) { mm_free(obp); return NULL; }
-    size_t osize = GET_SIZE(HDRP(obp));
+    size_t osize = GET_SIZE(obp);
     if (nsize == osize) return obp;
     osize = MINIMUM(nsize, osize);
     void *nbp = mm_malloc(nsize);
@@ -96,24 +91,20 @@ void *extend(size_t size) {
     PUT(HDRP(bp), PACK(size, 0));
     PUT(FTRP(bp), PACK(size, 0));
     PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1));
-    return coalesce(bp);
+    return bp;
 }
 
 void *coalesce(void *bp) {
-    size_t size = GET_SIZE(HDRP(bp));
-    void *pp = !GET_ALLC(FTRP(PREV_BLKP(bp))) ? PREV_BLKP(bp) : bp;
-    if (pp != bp) { delete(pp); size += GET_SIZE(FTRP(pp)); }
-    void *np = !GET_ALLC(HDRP(NEXT_BLKP(bp))) ? NEXT_BLKP(bp) : bp;
-    if (np != bp) { delete(np); size += GET_SIZE(HDRP(np)); }
-    PUT(HDRP(pp), PACK(size, 0));
-    PUT(FTRP(np), PACK(size, 0));
-    insert(pp);
-    return pp;
+    size_t size = GET_SIZE(bp);
+    if (!PREV_BLKP_ALLC(bp)) { delete(PREV_BLKP(bp)); size += GET_SIZE(PREV_BLKP(bp)); }
+    if (!NEXT_BLKP_ALLC(bp)) { delete(NEXT_BLKP(bp)); size += GET_SIZE(NEXT_BLKP(bp)); }
+    PUT(!PREV_BLKP_ALLC(bp) ? HDRP(PREV_BLKP(bp)) : HDRP(bp), PACK(size, 0));
+    PUT(!NEXT_BLKP_ALLC(bp) ? FTRP(NEXT_BLKP(bp)) : FTRP(bp), PACK(size, 0));
+    return !PREV_BLKP_ALLC(bp) ? PREV_BLKP(bp) : bp;
 }
 
 void split(void *bp, size_t asize) {
-    delete(bp);
-    size_t csize = GET_SIZE(HDRP(bp));
+    size_t csize = GET_SIZE(bp);
     if (csize - asize >= 2 * DSIZE) {
         PUT(HDRP(bp), PACK(asize, 1));
         PUT(FTRP(bp), PACK(asize, 1));
@@ -130,17 +121,17 @@ static int getindex(size_t size);
 
 void *findfit(size_t size) {
     for (int i = getindex(size); i < 9; ++i) {
-        void *pp = head_listp + i * WSIZE;
+        void *pp = head_list + i * WSIZE;
         while ((pp = NEXT_LNKP(pp)))
-            if (GET_SIZE(HDRP(pp)) >= size)
+            if (GET_SIZE(pp) >= size)
                 return pp;
     }
     return NULL;
 }
 
 void insert(void *bp) {
-    size_t size = GET_SIZE(HDRP(bp));
-    void *hp = head_listp + getindex(size) * WSIZE;
+    size_t size = GET_SIZE(bp);
+    void *hp = head_list + getindex(size) * WSIZE;
     NEXT_LNKP(bp) = NEXT_LNKP(hp);
     if (NEXT_LNKP(hp))
         PREV_LNKP(NEXT_LNKP(hp)) = bp;
