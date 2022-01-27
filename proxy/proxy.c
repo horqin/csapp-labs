@@ -24,12 +24,12 @@ void *thread(void *arg) {
     int connectfd = (int)(unsigned long)arg;
     pthread_detach(pthread_self());
 
-    char buf[LARGE_NUMBER], *ptr, c;
-    int nbuf, n;
+    char buf[LARGE_NUMBER], c;
+    int nbuf;
 
     nbuf = 0;
     do {
-        nbuf += Read(connectfd, buf + nbuf, sizeof(buf) - nbuf);
+        nbuf += Read(connectfd, buf + nbuf, sizeof buf);
     } while (!memmem(buf, nbuf, "\r\n\r\n", 4));
 
     char addr[SMALL_NUMBER/4];
@@ -43,20 +43,14 @@ void *thread(void *arg) {
         int clientfd = Open_clientfd(addr, port);
         nbuf = sprintf(buf, "%s /%s %s\r\nHost: %s\r\nConnection: %s\r\nProxy-Connection: %s\r\n\r\n", 
                 "GET", file, "HTTP/1.0", "www.cmu.edu", "close", "close");
-        ptr = buf;
-        while (ptr < buf + nbuf)
-            ptr += Write(clientfd, ptr, nbuf - (ptr - buf));
-        nbuf = 0;
-        while ((n = Read(clientfd, buf + nbuf, sizeof(buf) - nbuf)) != 0)
-            nbuf += n;
+        Rio_writen(clientfd, buf, nbuf);
+        nbuf = Rio_readn(clientfd, buf, sizeof buf);
         Close(clientfd);
         cache_modify(info, buf, nbuf);
     }
-    ptr = buf;
-    while (ptr < buf + nbuf)
-        ptr += Write(connectfd, ptr, nbuf - (ptr - buf));
+    Rio_writen(connectfd, buf, nbuf);
     shutdown(connectfd, SHUT_WR);
-    while ((Read(connectfd, &c, sizeof c)));
+    while (Read(connectfd, &c, sizeof c));
     Close(connectfd);
 
     return NULL;
