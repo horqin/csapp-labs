@@ -24,7 +24,7 @@ void *thread(void *arg) {
     int connectfd = (int)(unsigned long)arg;
     pthread_detach(pthread_self());
 
-    char buf[LARGE_NUMBER], *ptr;
+    char buf[LARGE_NUMBER], *ptr, c;
     int nbuf, n;
 
     nbuf = 0;
@@ -57,6 +57,8 @@ void *thread(void *arg) {
     ptr = buf;
     while (ptr < buf + nbuf)
         ptr += Write(connectfd, ptr, nbuf - (ptr - buf));
+    shutdown(connectfd, SHUT_WR);
+    while ((Read(connectfd, &c, sizeof c)));
     Close(connectfd);
 
     return NULL;
