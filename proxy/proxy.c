@@ -29,9 +29,7 @@ void *thread(void *arg) {
 
     nbuf = 0;
     do {
-        if ((n = Read(connectfd, buf + nbuf, sizeof(buf) - nbuf)) == 0)
-            app_error("[E] connection between client and proxy is closed");
-        nbuf += n;
+        nbuf += Read(connectfd, buf + nbuf, sizeof(buf) - nbuf);
     } while (!memmem(buf, nbuf, "\r\n\r\n", 4));
 
     char addr[SMALL_NUMBER/4];
